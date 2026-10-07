@@ -2,7 +2,7 @@
 
 [under development] project repository for
 
->  Pawlak, C., Kenny, R., Ruiz, T., Schedler, J., Veerasingam, K., Pineda, A., Fricker, G., Gillespie, T., Ritter, M., & Yost, J. (2026). Supporting data for: New allometric equations for urban trees. [Under review].
+>  Pawlak, C., Kenny, R., Ruiz, T., Schedler, J., Veerasingam, K., Pineda, A., Fricker, G., Gillespie, T., Ritter, M., & Yost, J. (2026). New allometric equations for urban trees. [Under review].
 
 repository contributors: Camille Pawlak, Trevor Ruiz, Julia Schedler, Reed Kenny, Kaviya Veerasingam
 
