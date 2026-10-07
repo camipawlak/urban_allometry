@@ -1,0 +1,83 @@
+# History files
+.Rhistory
+.Rapp.history
+
+# Session Data files
+.RData
+.RDataTmp
+
+# User-specific files
+.Ruserdata
+
+# Example code in package build process
+*-Ex.R
+
+# Output files from R CMD build
+/*.tar.gz
+
+# Output files from R CMD check
+/*.Rcheck/
+
+# RStudio files
+.Rproj.user/
+
+# produced vignettes
+vignettes/*.html
+vignettes/*.pdf
+
+# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
+.httr-oauth
+
+# knitr and R markdown default cache directories
+*_cache/
+/cache/
+
+# Temporary files created by R markdown
+*.utf8.md
+*.knit.md
+
+# R Environment Variables
+.Renviron
+
+# pkgdown site
+docs/
+
+# translation temp files
+po/*~
+
+# RStudio Connect folder
+rsconnect/
+
+# directory removal
+_*
+
+# other files
+.DS_Store
+.positai
+
+# Dash app (kept in this repo for convenience but not pushed to GitHub)
+app/
+
+# stray default-device output from non-interactive R runs
+Rplots.pdf
+
+# Office lock files (created while a workbook is open)
+~$*
+
+# Safety net: data files must never be committed. Raw and intermediate inventory
+# files carry tree locations. Scoped to data/ so rslt/ tables stay tracked.
+data/**/*.csv
+data/**/*.rds
+data/**/*.RData
+data/**/*.xlsx
+*.RData
+*.rda
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.gpkg
+*.geojson
+*.tif
+*.tiff

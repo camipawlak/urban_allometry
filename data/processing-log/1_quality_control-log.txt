@@ -1,0 +1,48 @@
+Run timestamp: 2026-05-08T10:14:09-07:00
+--------------------------------------------------------------------------------
+Using data_dir  : data\_processed
+Using out_dir   : data\_processed
+Using log_dir   : data\processing-log
+Using report_dir: data\_reports
+Input file      : data\_processed\wca_name_resolved.csv
+Clean output    : data\_processed\wca_filtered.csv
+Removed output  : data\_processed\wca_removals.csv
+Log file        : data\processing-log\1_quality_control-log.txt
+Report (qc_removed_counts): data\_reports\qc_removed_counts.csv
+Read rows: 5578032
+Columns: ['Id', 'TreeId', 'TreeHistoryBillDbh', 'TreeHistoryBillHeight', 'TreeHistoryDateWorked', 'TreeHistoryLatitude', 'TreeHistoryLongitude', 'CurrentTreeLatitude', 'CurrentTreeLongitude', 'genus', 'SpeciesBotanical_clean', 'CurrentSpeciesBotanical_clean']
+After conversion rows: 5578032
+Removed invalid: 634484
+Remaining: 4943548
+Removed under 5 ft: 144838
+Remaining: 4798710
+Removed conflicting DBH groups rows: 3020
+Remaining: 4795690
+Removed inconsistent over time: 503055
+Remaining: 4292635
+Removed mismatch within row: 692622
+Remaining: 3600013
+Removed negative growth rows: 1347087
+Remaining: 2252926
+Trees removed (negative growth): 353667
+Rows with computed tree_age_yrs: 190324
+Final clean rows: 2252926
+Final clean columns: ['row_id', 'tree_id', 'scientific_name_clean', 'genus', 'date_worked_bill', 'dbh_cm_bill', 'height_m_bill', 'latitude_bill', 'longitude_bill', 'tree_age_days', 'tree_age_yrs']
+Total records before cleaning: 5,578,032
+Total clean records: 2,252,926
+Total removed records: 3,325,106
+
+Removed by reason:
+reason_removed
+negative_growth               1347087
+species_changed_within_row     692622
+missing_or_invalid_value       634484
+species_change_over_time       503055
+under_5_ft                     144838
+conflicting_dbh_same_date        3020
+Name: count, dtype: int64
+
+Saved cleaned data to: data\_processed\wca_filtered.csv
+Saved removed records to: data\_processed\wca_removals.csv
+
+Wrote report: data\_reports\qc_removed_counts.csv

@@ -1,0 +1,621 @@
+---
+title: "Itree_biomass_comp"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+# Load DBH growth rates
+
+```{r load-growth-rates}
+itree <- read.csv("../../data/_raw/SpeciesList_2025-04-29-10-30-15-AM.csv")
+
+itree <- itree %>%
+  mutate(
+    sci_name = paste0(Genus.Name, " ", Species.Name),
+    itree_dbh_growth = case_when(
+      Growth.Rate == "Slow"     ~ 0.58,
+      Growth.Rate == "Moderate" ~ 0.84,
+      Growth.Rate == "Fast"     ~ 1.09,
+      TRUE                      ~ NA_real_
+    )
+  )
+
+wca <- read.csv("../../rslt/dbh-rates/wca_dbh_growth_rates.csv")
+
+growth_rates <- left_join(wca, itree, by = c("spp" = "sci_name")) %>%
+  select(
+    scientific_name_clean      = spp,
+    itree_DBH_growth_cm_per_yr = itree_dbh_growth,
+    cufi_DBH_growth_cm_per_yr  = standardized_growth_rate_cm_per_year
+  )
+```
+
+# Biomass calculator functions
+
+Based on USFS GTR-NRS-200-2023 Appendix 10. Implements hierarchical taxonomic
+fallback for species without direct equations.
+
+```{r biomass-functions}
+# Load the biomass equations data (includes taxonomy)
+load_biomass_data <- function(file_path = "../../data/_raw/itree_biomass.csv") {
+  data <- read.csv(file_path, stringsAsFactors = FALSE)
+  if ("scientific_name" %in% names(data) && !"sci_name" %in% names(data)) {
+    names(data)[names(data) == "scientific_name"] <- "sci_name"
+  }
+  data
+}
+
+# Load the wood density data
+load_wood_density_data <- function(file_path = "../../data/_raw/appendix11_wood_density_genus_species.csv") {
+  read.csv(file_path, stringsAsFactors = FALSE)
+}
+
+# Equation implementations
+power_form <- function(x, a, b)              a * (x ^ b)
+exponential_ln <- function(x, a, b, c = 0)  exp(a + b * log(x) + (c / 2))
+exponential_simple <- function(x, a, b)      exp(a + b * log(x))
+exponential_alt <- function(x, a, b)         exp(b + a * log(x))
+polynomial_6th <- function(x, a, b, c, d, e, f, g) a + b*x + c*x^2 + d*x^3 + e*x^4 + f*x^5 + g*x^6
+polynomial_5th <- function(x, a, b, c, d, e, f)    a + b*x + c*x^2 + d*x^3 + e*x^4 + f*x^5
+polynomial_4th <- function(x, a, b, c, d, e)       a + b*x + c*x^2 + d*x^3 + e*x^4
+polynomial_3rd <- function(x, a, b, c, d)          a + b*x + c*x^2 + d*x^3
+log10_form <- function(x, a, b)              10 ^ (a + b * log10(x))
+power10_form <- function(x, a, b)            (10 ^ a) * (x ^ b)
+squared_power <- function(x, a, b)           a * ((x ^ 2) ^ b)
+simple_squared <- function(x, a)             a * (x ^ 2)
+oak_squared <- function(x, a, b)             (a * (x ^ 2)) + b
+dht_form <- function(dht, a, b, c = 0)       exp(a + b * log(dht) + (c / 2))
+
+# Apply biomass equation to a single row of biomass data
+apply_biomass_equation <- function(row, dbh, height = NULL) {
+  a <- row$a; b <- row$b; c <- row$c; d <- row$d
+  e <- row$e; f <- row$f; g <- row$g
+
+  dbh_converted <- dbh
+  if (!is.na(row$dbh_unit) && tolower(row$dbh_unit) == "in") {
+    dbh_converted <- dbh / 2.54
+  }
+
+  if (!is.na(row$uses_dht) && row$uses_dht == TRUE && !is.null(height)) {
+    dht <- (dbh_converted ^ 2) * height
+    biomass <- switch(row$equation_form,
+      "power_form"     = power_form(dht, a, b),
+      "exponential_ln" = dht_form(dht, a, b, c),
+      NA
+    )
+  } else {
+    biomass <- switch(row$equation_form,
+      "power_form"       = power_form(dbh_converted, a, b),
+      "exponential_ln"   = exponential_ln(dbh_converted, a, b, c),
+      "exponential_simple" = exponential_simple(dbh_converted, a, b),
+      "exponential_alt"  = exponential_alt(dbh_converted, a, b),
+      "polynomial_6th"   = polynomial_6th(dbh_converted, a, b, c, d, e, f, g),
+      "polynomial_5th"   = polynomial_5th(dbh_converted, a, b, c, d, e, f),
+      "polynomial_4th"   = polynomial_4th(dbh_converted, a, b, c, d, e),
+      "polynomial_3rd"   = polynomial_3rd(dbh_converted, a, b, c, d),
+      "log10_form"       = log10_form(dbh_converted, a, b),
+      "power10_form"     = power10_form(dbh_converted, a, b),
+      "squared_power"    = squared_power(dbh_converted, a, b),
+      "simple_squared"   = simple_squared(dbh_converted, a),
+      "oak_squared"      = oak_squared(dbh_converted, a, b),
+      NA
+    )
+  }
+
+  if (!is.na(biomass) && !is.na(row$output_units) && grepl("lb", row$output_units)) {
+    biomass <- biomass * 0.453592
+  }
+  biomass
+}
+
+get_genus <- function(species) strsplit(species, " ")[[1]][1]
+
+# Get wood density for a species (falls back to genus average if needed)
+get_wood_density <- function(species, wood_density_data) {
+  parts <- strsplit(species, " ")[[1]]
+  genus <- parts[1]
+  sp_epithet <- if (length(parts) > 1) parts[2] else ""
+
+  if (sp_epithet != "" && !grepl("spp\\.", sp_epithet)) {
+    match_idx <- which(wood_density_data$genus == genus &
+                       wood_density_data$species == sp_epithet)
+    if (length(match_idx) > 0) {
+      return(list(density = wood_density_data$wood_density_tonne_m3[match_idx[1]], source = "species"))
+    }
+  }
+
+  genus_idx <- which(wood_density_data$genus == genus &
+                     (is.na(wood_density_data$species) | wood_density_data$species == ""))
+  if (length(genus_idx) > 0) {
+    return(list(density = wood_density_data$wood_density_tonne_m3[genus_idx[1]], source = "genus"))
+  }
+
+  list(density = NA, source = NA)
+}
+
+has_equation <- function(row) {
+  eq_form <- row$equation_form
+  a_val <- row$a
+  if (length(eq_form) > 1) eq_form <- eq_form[1]
+  if (length(a_val) > 1)   a_val   <- a_val[1]
+  !is.na(eq_form) && eq_form != "" && !is.na(a_val)
+}
+
+find_species_at_level <- function(taxon_name, level, biomass_data) {
+  if (is.na(taxon_name) || taxon_name == "") return(integer(0))
+
+  matching_indices <- c()
+  for (i in seq_len(nrow(biomass_data))) {
+    row <- biomass_data[i, ]
+    if (!has_equation(row)) next
+    taxon_value <- switch(level,
+      "genus"  = get_genus(row$sci_name),
+      "family" = row$Family,
+      "order"  = row$Order,
+      "class"  = row$Class,
+      NA
+    )
+    if (!is.na(taxon_value) && tolower(taxon_value) == tolower(taxon_name)) {
+      matching_indices <- c(matching_indices, i)
+    }
+  }
+  matching_indices
+}
+
+get_taxonomy <- function(species, biomass_data) {
+  species_lower <- tolower(species)
+  match_idx <- which(tolower(biomass_data$sci_name) == species_lower)
+
+  if (length(match_idx) > 0) {
+    row <- biomass_data[match_idx[1], ]
+    return(list(genus = get_genus(row$sci_name), family = row$Family,
+                order = row$Order, class = row$Class))
+  }
+
+  genus <- get_genus(species)
+  genus_matches <- which(sapply(biomass_data$sci_name, get_genus) == genus)
+  if (length(genus_matches) > 0) {
+    row <- biomass_data[genus_matches[1], ]
+    return(list(genus = genus, family = row$Family, order = row$Order, class = row$Class))
+  }
+
+  list(genus = genus, family = NA, order = NA, class = NA)
+}
+
+# Calculate biomass with hierarchical taxonomic fallback
+calculate_biomass <- function(species, dbh, biomass_data = NULL, wood_density_data = NULL,
+                              height = NULL, verbose = FALSE) {
+  if (is.null(biomass_data))      biomass_data      <- load_biomass_data()
+  if (is.null(wood_density_data)) wood_density_data <- load_wood_density_data()
+
+  species_lower <- tolower(species)
+  match_idx <- which(
+    tolower(biomass_data$sci_name)    == species_lower |
+    tolower(biomass_data$common_name) == species_lower
+  )
+
+  if (length(match_idx) > 0) {
+    valid <- sapply(match_idx, function(i) has_equation(biomass_data[i, ]))
+    match_idx <- match_idx[valid]
+  }
+
+  if (length(match_idx) > 0) {
+    row <- biomass_data[match_idx[1], ]
+
+    if (!is.na(row$dbh_min) && !is.na(row$dbh_max)) {
+      if (dbh < row$dbh_min || dbh > row$dbh_max) {
+        warning(sprintf("DBH %.1f cm is outside valid range (%.0f-%.0f cm) for %s.",
+                        dbh, row$dbh_min, row$dbh_max, row$sci_name))
+      }
+    }
+    if (!is.na(row$uses_dht) && row$uses_dht == TRUE && is.null(height)) {
+      stop(sprintf("Height is required for %s (uses DBH*Height equation).", row$sci_name))
+    }
+
+    biomass <- apply_biomass_equation(row, dbh, height)
+    urban_correction <- 1.0
+    if (is.na(row$urban) || tolower(row$urban) != "yes") {
+      urban_correction <- 0.8
+      biomass <- biomass * urban_correction
+    }
+
+    result <- list(species = row$sci_name, common_name = row$common_name, dbh_cm = dbh,
+                   biomass_kg = biomass, equation_form = row$equation_form,
+                   output_units = row$output_units, reference = row$reference,
+                   dbh_range = c(row$dbh_min, row$dbh_max), match_method = "exact",
+                   match_taxon = NA, n_averaged = 1, urban_correction = urban_correction)
+    class(result) <- "biomass_estimate"
+    return(result)
+  }
+
+  sp_taxonomy <- get_taxonomy(species, biomass_data)
+  taxonomic_levels <- list(
+    list(level = "genus",  taxon = sp_taxonomy$genus),
+    list(level = "family", taxon = sp_taxonomy$family),
+    list(level = "order",  taxon = sp_taxonomy$order),
+    list(level = "class",  taxon = sp_taxonomy$class)
+  )
+
+  for (tax_level in taxonomic_levels) {
+    level_name <- tax_level$level
+    taxon_name <- tax_level$taxon
+    if (is.na(taxon_name) || taxon_name == "") next
+
+    spp_name <- paste0(taxon_name, " spp.")
+    spp_idx  <- which(tolower(biomass_data$sci_name) == tolower(spp_name))
+    if (length(spp_idx) > 0) {
+      valid   <- sapply(spp_idx, function(i) has_equation(biomass_data[i, ]))
+      spp_idx <- spp_idx[valid]
+    }
+
+    if (length(spp_idx) > 0) {
+      row <- biomass_data[spp_idx[1], ]
+      biomass <- apply_biomass_equation(row, dbh, height)
+
+      spp_wd    <- get_wood_density(row$sci_name, wood_density_data)
+      target_wd <- get_wood_density(species, wood_density_data)
+      wood_density_ratio <- 1.0
+      if (!is.na(spp_wd$density) && !is.na(target_wd$density) && spp_wd$density > 0) {
+        wood_density_ratio <- target_wd$density / spp_wd$density
+        biomass <- biomass * wood_density_ratio
+      }
+
+      urban_correction <- 1.0
+      if (is.na(row$urban) || tolower(row$urban) != "yes") {
+        urban_correction <- 0.8
+        biomass <- biomass * urban_correction
+      }
+
+      if (verbose) message(sprintf("%s: Using %s entry (wood density ratio: %.3f, urban correction: %.1f)",
+                                   species, spp_name, wood_density_ratio, urban_correction))
+
+      result <- list(species = species, common_name = paste0("(", level_name, " average: ", taxon_name, ")"),
+                     dbh_cm = dbh, biomass_kg = biomass, equation_form = row$equation_form,
+                     output_units = row$output_units, reference = row$reference,
+                     dbh_range = c(row$dbh_min, row$dbh_max),
+                     match_method = paste0(level_name, "_spp"), match_taxon = taxon_name, n_averaged = 1,
+                     wood_density_ratio = wood_density_ratio, target_wood_density = target_wd$density,
+                     avg_wood_density = spp_wd$density, urban_correction = urban_correction)
+      class(result) <- "biomass_estimate"
+      return(result)
+    }
+
+    related_idx <- find_species_at_level(taxon_name, level_name, biomass_data)
+    if (length(related_idx) > 0) {
+      biomass_values <- c(); wood_densities <- c(); urban_corrections <- c()
+      dbh_mins <- c(); dbh_maxs <- c()
+
+      for (idx in related_idx) {
+        row <- biomass_data[idx, ]
+        if (!is.na(row$uses_dht) && row$uses_dht == TRUE && is.null(height)) next
+        b <- tryCatch(apply_biomass_equation(row, dbh, height), error = function(e) NA)
+        if (!is.na(b)) {
+          urban_corr <- 1.0
+          if (is.na(row$urban) || tolower(row$urban) != "yes") {
+            urban_corr <- 0.8
+            b <- b * urban_corr
+          }
+          biomass_values    <- c(biomass_values, b)
+          urban_corrections <- c(urban_corrections, urban_corr)
+          wd <- get_wood_density(row$sci_name, wood_density_data)
+          wood_densities <- c(wood_densities, wd$density)
+          if (!is.na(row$dbh_min)) dbh_mins <- c(dbh_mins, row$dbh_min)
+          if (!is.na(row$dbh_max)) dbh_maxs <- c(dbh_maxs, row$dbh_max)
+        }
+      }
+
+      if (length(biomass_values) > 0) {
+        avg_biomass        <- mean(biomass_values)
+        avg_wood_density   <- mean(wood_densities, na.rm = TRUE)
+        avg_urban_correction <- mean(urban_corrections)
+
+        target_wd <- get_wood_density(species, wood_density_data)
+        wood_density_ratio <- 1.0
+        if (!is.na(avg_wood_density) && !is.na(target_wd$density) && avg_wood_density > 0) {
+          wood_density_ratio <- target_wd$density / avg_wood_density
+          avg_biomass <- avg_biomass * wood_density_ratio
+        }
+
+        if (verbose) message(sprintf(
+          "%s: Using %s-level average (%s) from %d species (wood density ratio: %.3f, avg urban correction: %.2f)",
+          species, level_name, taxon_name, length(biomass_values), wood_density_ratio, avg_urban_correction))
+
+        result <- list(species = species, common_name = paste0("(", level_name, " average: ", taxon_name, ")"),
+                       dbh_cm = dbh, biomass_kg = avg_biomass,
+                       equation_form = paste0(level_name, "_average"), output_units = "kg",
+                       reference = paste0("Average of ", length(biomass_values), " ", level_name, " species"),
+                       dbh_range = c(if (length(dbh_mins) > 0) min(dbh_mins) else NA,
+                                     if (length(dbh_maxs) > 0) max(dbh_maxs) else NA),
+                       match_method = paste0(level_name, "_average"), match_taxon = taxon_name,
+                       n_averaged = length(biomass_values), wood_density_ratio = wood_density_ratio,
+                       target_wood_density = target_wd$density, avg_wood_density = avg_wood_density,
+                       avg_urban_correction = avg_urban_correction)
+        class(result) <- "biomass_estimate"
+        return(result)
+      }
+    }
+  }
+
+  stop(sprintf(
+    "No biomass equation found for '%s' at any taxonomic level (genus: %s, family: %s, order: %s, class: %s)",
+    species, sp_taxonomy$genus, sp_taxonomy$family, sp_taxonomy$order, sp_taxonomy$class
+  ))
+}
+
+print.biomass_estimate <- function(x, ...) {
+  cat("Biomass Estimate\n----------------\n")
+  cat(sprintf("Species: %s %s\n", x$species,
+              ifelse(is.na(x$common_name) || x$match_method != "exact", "", paste0("(", x$common_name, ")"))))
+  cat(sprintf("DBH: %.1f cm\n", x$dbh_cm))
+  cat(sprintf("Biomass: %.2f kg\n", x$biomass_kg))
+  cat(sprintf("Equation: %s\n", x$equation_form))
+  if (!is.na(x$dbh_range[1]) && !is.na(x$dbh_range[2])) {
+    cat(sprintf("Valid DBH range: %d-%d cm\n", x$dbh_range[1], x$dbh_range[2]))
+  }
+  cat(sprintf("Reference: %s\n", x$reference))
+  if (x$match_method != "exact") {
+    cat(sprintf("Match method: %s (%s, n=%d)\n", x$match_method, x$match_taxon, x$n_averaged))
+  }
+  invisible(x)
+}
+```
+
+# Biomass over time functions
+
+```{r biomass-over-time-functions}
+# Load age-DBH model coefficients from the mixed-effects log-log model
+# (log(dbh) ~ log(age) + (1 + log(age) | spp), age in years)
+# Returns list with $species (per-species BLUPs) and $population (fixed effects)
+load_age_dbh_models <- function(path = "../../rslt/age-dbh/dbh-age-coefs.rds") {
+  readRDS(path)
+}
+
+# Get age-DBH function for a species; returns list(fn, model_type) or NULL
+# Uses species-level BLUPs if available, falls back to population-level estimates
+get_age_dbh_function <- function(species, age_dbh_models) {
+  if (is.null(age_dbh_models)) return(NULL)
+
+  species_lower <- tolower(species)
+  idx <- which(tolower(age_dbh_models$species$spp) == species_lower)
+
+  if (length(idx) > 0) {
+    a <- age_dbh_models$species$intercept[idx[1]]
+    b <- age_dbh_models$species$slope[idx[1]]
+  } else {
+    pop <- age_dbh_models$population
+    a   <- pop$estimate[pop$term == "intercept"]
+    b   <- pop$estimate[pop$term == "slope"]
+  }
+
+  list(
+    fn         = function(age_years) exp(a + b * log(age_years)),
+    model_type = "loglog"
+  )
+}
+
+# Generate biomass over time data for a species
+generate_biomass_over_time <- function(species, growth_data = NULL, biomass_data = NULL,
+                                       age_dbh_models = NULL, initial_dbh = 5) {
+  if (is.null(growth_data))  growth_data  <- growth_rates
+  if (is.null(biomass_data)) biomass_data <- load_biomass_data()
+  if (is.null(age_dbh_models)) {
+    age_dbh_models <- tryCatch(load_age_dbh_models(), error = function(e) NULL)
+  }
+
+  species_lower <- tolower(species)
+  growth_idx <- which(tolower(growth_data$scientific_name_clean) == species_lower)
+  if (length(growth_idx) == 0) stop(paste("Species not found in growth rates:", species))
+
+  growth_row <- growth_data[growth_idx[1], ]
+  itree_rate <- growth_row$itree_DBH_growth_cm_per_yr
+  cufi_rate  <- growth_row$cufi_DBH_growth_cm_per_yr
+
+  test_result  <- calculate_biomass(species, initial_dbh, biomass_data)
+  max_dbh      <- test_result$dbh_range[2]
+  species_name <- test_result$species
+  common_name  <- test_result$common_name
+  if (is.na(max_dbh)) max_dbh <- 100
+
+  years <- 0:50
+  results <- data.frame(year = integer(), dbh = numeric(), biomass = numeric(),
+                        growth_rate = character(), stringsAsFactors = FALSE)
+
+  if (!is.na(itree_rate)) {
+    for (yr in years) {
+      dbh <- min(initial_dbh + (itree_rate * yr), max_dbh)
+      biomass <- tryCatch(calculate_biomass(species, dbh, biomass_data)$biomass_kg, error = function(e) NA)
+      results <- rbind(results, data.frame(year = yr, dbh = dbh, biomass = biomass, growth_rate = "i-Tree DBH growth rate"))
+      if (dbh >= max_dbh) break
+    }
+  }
+
+  if (!is.na(cufi_rate)) {
+    for (yr in years) {
+      dbh <- min(initial_dbh + (cufi_rate * yr), max_dbh)
+      biomass <- tryCatch(calculate_biomass(species, dbh, biomass_data)$biomass_kg, error = function(e) NA)
+      results <- rbind(results, data.frame(year = yr, dbh = dbh, biomass = biomass, growth_rate = "Our DBH growth rate"))
+      if (dbh >= max_dbh) break
+    }
+  }
+
+  age_dbh_info      <- get_age_dbh_function(species, age_dbh_models)
+  age_dbh_model_type <- NULL
+
+  if (!is.null(age_dbh_info)) {
+    age_dbh_fn        <- age_dbh_info$fn
+    age_dbh_model_type <- age_dbh_info$model_type
+
+    for (yr in years) {
+      if (yr == 0 && age_dbh_model_type %in% c("ln", "logten", "loglog")) next
+      dbh <- tryCatch({
+        d <- age_dbh_fn(yr)
+        min(max(d, 0), max_dbh)
+      }, error = function(e) NA)
+      if (is.na(dbh) || dbh <= 0) next
+      biomass <- tryCatch(calculate_biomass(species, dbh, biomass_data)$biomass_kg, error = function(e) NA)
+      results <- rbind(results, data.frame(year = yr, dbh = dbh, biomass = biomass, growth_rate = "Our Age-DBH"))
+      if (dbh >= max_dbh) break
+    }
+  }
+
+  attr(results, "species")           <- species_name
+  attr(results, "common_name")       <- common_name
+  attr(results, "max_dbh")           <- max_dbh
+  attr(results, "itree_rate")        <- itree_rate
+  attr(results, "cufi_rate")         <- cufi_rate
+  attr(results, "age_dbh_model_type") <- age_dbh_model_type
+  results
+}
+
+# Combined plot: DBH and biomass over time
+plot_growth_combined <- function(species, growth_data = NULL, biomass_data = NULL,
+                                 age_dbh_models = NULL, initial_dbh = 5) {
+  if (is.null(growth_data))  growth_data  <- growth_rates
+  if (is.null(biomass_data)) biomass_data <- load_biomass_data()
+
+  data <- generate_biomass_over_time(species, growth_data, biomass_data, age_dbh_models, initial_dbh)
+
+  species_name       <- attr(data, "species")
+  common_name        <- attr(data, "common_name")
+  itree_rate         <- attr(data, "itree_rate")
+  cufi_rate          <- attr(data, "cufi_rate")
+  age_dbh_model_type <- attr(data, "age_dbh_model_type")
+
+  data_long <- pivot_longer(data, cols = c(dbh, biomass), names_to = "metric", values_to = "value")
+  data_long$metric <- factor(data_long$metric, levels = c("dbh", "biomass"),
+                             labels = c("DBH (cm)", "Biomass (kg)"))
+
+  rates_text <- paste0(
+    "i-Tree = ", ifelse(is.na(itree_rate), "N/A", sprintf("%.2f", itree_rate)),
+    " cm/yr | Our = ", ifelse(is.na(cufi_rate), "N/A", sprintf("%.2f", cufi_rate)), " cm/yr",
+    ifelse(!is.null(age_dbh_model_type), paste0(" | Age-DBH: ", age_dbh_model_type), "")
+  )
+
+  ggplot(data_long, aes(x = year, y = value, color = growth_rate, linetype = growth_rate)) +
+    geom_line(linewidth = 1) +
+    facet_wrap(~metric, scales = "free_y", ncol = 1) +
+    scale_color_manual(values = c("i-Tree DBH growth rate" = "#2E7D32",
+                                   "Our DBH growth rate" = "#1B5E20",
+                                   "Our Age-DBH" = "#81C784")) +
+    scale_linetype_manual(values = c("i-Tree DBH growth rate" = "dashed",
+                                      "Our DBH growth rate" = "solid",
+                                      "Our Age-DBH" = "solid")) +
+    labs(title = bquote(italic(.(species_name)) ~ "(" * .(common_name) * ")"), subtitle = rates_text,
+         x = "Years", y = NULL, color = "Growth Rate", linetype = "Growth Rate") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14),
+          plot.subtitle = element_text(size = 10),
+          strip.text = element_text(size = 11, face = "bold"),
+          legend.position = "bottom",
+          panel.grid = element_blank())
+}
+```
+
+# Load data
+
+```{r load-data}
+biomass_data      <- load_biomass_data()
+wood_density_data <- load_wood_density_data()
+age_dbh_models    <- load_age_dbh_models()
+
+# Filter to species with valid biomass equations
+all_species <- growth_rates$scientific_name_clean
+
+has_valid_equation <- sapply(all_species, function(sp) {
+  tryCatch({
+    calc <- calculate_biomass(sp, 50, biomass_data)
+    !is.na(calc$biomass_kg) && calc$biomass_kg > 0
+  }, error = function(e) FALSE)
+})
+
+species_list <- all_species[has_valid_equation]
+n_excluded   <- sum(!has_valid_equation)
+
+cat("Species with valid biomass equations:", length(species_list), "\n")
+cat("Species excluded (no equation):", n_excluded, "\n")
+```
+
+# Summary statistics
+
+```{r summary-table}
+summary_df <- growth_rates %>%
+  select(
+    Species              = scientific_name_clean,
+    `i-Tree (cm/yr)`     = itree_DBH_growth_cm_per_yr,
+    `CUFI (cm/yr)`       = cufi_DBH_growth_cm_per_yr
+  ) %>%
+  mutate(
+    Difference          = `CUFI (cm/yr)` - `i-Tree (cm/yr)`,
+    `Ratio (CUFI/i-Tree)` = round(`CUFI (cm/yr)` / `i-Tree (cm/yr)`, 2)
+  )
+
+cat("Growth Rate Comparison:\n")
+cat("- Species with both rates:",
+    sum(!is.na(growth_rates$itree_DBH_growth_cm_per_yr) & !is.na(growth_rates$cufi_DBH_growth_cm_per_yr)), "\n")
+cat("- Species with only i-Tree:",
+    sum(!is.na(growth_rates$itree_DBH_growth_cm_per_yr) & is.na(growth_rates$cufi_DBH_growth_cm_per_yr)), "\n")
+cat("- Species with only CUFI:",
+    sum(is.na(growth_rates$itree_DBH_growth_cm_per_yr) & !is.na(growth_rates$cufi_DBH_growth_cm_per_yr)), "\n")
+```
+
+```{r growth-rate-histogram, fig.height=3.4}
+growth_long <- growth_rates %>%
+  select(scientific_name_clean, itree_DBH_growth_cm_per_yr, cufi_DBH_growth_cm_per_yr) %>%
+  pivot_longer(
+    cols = c(itree_DBH_growth_cm_per_yr, cufi_DBH_growth_cm_per_yr),
+    names_to = "source",
+    values_to = "growth_rate"
+  ) %>%
+  mutate(source_clean = case_when(
+    source == "itree_DBH_growth_cm_per_yr" ~ "i-Tree",
+    source == "cufi_DBH_growth_cm_per_yr"  ~ "CUFI",
+    TRUE ~ source
+  )) %>%
+  filter(!is.na(growth_rate))
+
+ggplot(growth_long, aes(x = growth_rate, fill = source_clean)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  scale_fill_manual(values = c("i-Tree" = "#1976D2", "CUFI" = "#D32F2F")) +
+  labs(title = "Distribution of DBH Growth Rates",
+       x = "Growth Rate (cm/year)", y = "Count", fill = "Source") +
+  theme_minimal()
+```
+
+# Species biomass projections
+
+```{r species-plots, fig.height=6, fig.width=8}
+dir.create("../../_img/itree_bio_comp", showWarnings = FALSE, recursive = TRUE)
+
+for (species in species_list) {
+  tryCatch({
+    p <- plot_growth_combined(species, growth_rates, biomass_data, age_dbh_models, initial_dbh = 5)
+    print(p)
+    ggsave(
+      filename = file.path("../../_img/itree_bio_comp", paste0(gsub(" ", "_", species), "_itree_comp.png")),
+      plot = p, width = 8, height = 6
+    )
+  }, error = function(e) {
+    message("Skipping ", species, ": ", conditionMessage(e))
+  })
+}
+```
+
+
+## Paper figures
+
+```{r}
+
+dir.create("../../_figures/growth_rates", showWarnings = FALSE, recursive = TRUE)
+
+fig1 <- plot_growth_combined("Quercus agrifolia", growth_rates, biomass_data, age_dbh_models, initial_dbh = 5)
+
+fig2 <- plot_growth_combined("Quercus rubra", growth_rates, biomass_data, age_dbh_models, initial_dbh = 5)
+
+ggsave(plot = fig1, filename = "../../_figures/growth_rates/Quercus_agrifolia.png")
+
+ggsave("../../_figures/growth_rates/quercus_rubra.png", fig2)
+
+```

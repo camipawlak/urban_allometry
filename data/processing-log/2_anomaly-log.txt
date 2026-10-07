@@ -1,0 +1,80 @@
+Run timestamp: 2026-05-08T10:23:46-07:00
+--------------------------------------------------------------------------------
+Using data_dir  : data\_processed
+Using out_dir   : data\_processed
+Using log_dir   : data\processing-log
+Using report_dir: data\_reports
+Input path      : data\_processed\wca_filtered.csv
+Output path     : data\_processed\wca_filtered_annotated.csv
+Canopy path     : data\_raw\canopy_data.csv
+Log file        : data\processing-log\2_anomaly-log.txt
+Threshold       : 0.85
+Min points/spec : 5
+Loaded 2,252,926 rows
+Columns: ['row_id', 'tree_id', 'scientific_name_clean', 'genus', 'date_worked_bill', 'dbh_cm_bill', 'height_m_bill', 'latitude_bill', 'longitude_bill', 'tree_age_days', 'tree_age_yrs']
+
+================================================================================
+Step: Canopy merge
+Canopy path: data\_raw\canopy_data.csv
+Canopy exists: True
+================================================================================
+Loaded canopy file: 28057 rows, 25 columns
+Canopy columns: ['poly_id', 'canopy_year', 'poly_idx', 'index_pt', 'row_id', 'tree_id', 'scientific_name_clean', 'date_worked_bill', 'dbh_cm_bill', 'height_m_bill', 'latitude_bill', 'longitude_bill', 'tree_age_days', 'tree_age_yrs', 'canopy_width_ew_m', 'canopy_width_ns_m', 'canopy_width_avg_m', 'canopy_area_m2', 'canopy_area_ft2', 'canopy_width_ew_ft', 'canopy_width_ns_ft', 'canopy_width_avg_ft', 'area_m2', 'perim_m', 'thinness']
+WARNING: canopy file has 1 duplicate row_id values; keeping first.
+All canopy columns: ['poly_id', 'canopy_year', 'poly_idx', 'index_pt', 'tree_id', 'scientific_name_clean', 'date_worked_bill', 'dbh_cm_bill', 'height_m_bill', 'latitude_bill', 'longitude_bill', 'tree_age_days', 'tree_age_yrs', 'canopy_width_ew_m', 'canopy_width_ns_m', 'canopy_width_avg_m', 'canopy_area_m2', 'canopy_area_ft2', 'canopy_width_ew_ft', 'canopy_width_ns_ft', 'canopy_width_avg_ft', 'area_m2', 'perim_m', 'thinness']
+New canopy columns to add: ['poly_id', 'canopy_year', 'poly_idx', 'index_pt', 'canopy_width_ew_m', 'canopy_width_ns_m', 'canopy_width_avg_m', 'canopy_area_m2', 'canopy_area_ft2', 'canopy_width_ew_ft', 'canopy_width_ns_ft', 'canopy_width_avg_ft', 'area_m2', 'perim_m', 'thinness']
+Merging 15 new canopy columns: ['poly_id', 'canopy_year', 'poly_idx']...
+Merge successful. Added 15 columns: ['canopy_width_ns_ft', 'canopy_width_avg_m', 'canopy_width_ns_m', 'canopy_area_m2', 'canopy_year']...
+Columns after merge: ['row_id', 'tree_id', 'scientific_name_clean', 'genus', 'date_worked_bill', 'dbh_cm_bill', 'height_m_bill', 'latitude_bill', 'longitude_bill', 'tree_age_days', 'tree_age_yrs', 'poly_id', 'canopy_year', 'poly_idx', 'index_pt', 'canopy_width_ew_m', 'canopy_width_ns_m', 'canopy_width_avg_m', 'canopy_area_m2', 'canopy_area_ft2', 'canopy_width_ew_ft', 'canopy_width_ns_ft', 'canopy_width_avg_ft', 'area_m2', 'perim_m', 'thinness']
+
+--- Canopy merge diagnostics ---
+Input rows: 2252926 Merged rows: 2252926
+Rows with ANY canopy value: 28060 (1.2%)
+--- end diagnostics ---
+
+
+================================================================================
+Step: Anomaly detection
+Models: ['dbh_height', 'age_dbh_height', 'dbh_height_canopy_width', 'dbh_height_canopy_area']
+================================================================================
+
+Fitting model: dbh_height with features ['dbh_cm_bill', 'height_m_bill']
+
+Fitting model: dbh_height (features: dbh_cm_bill, height_m_bill)
+  Fitted species: 198
+  Scored rows   : 2,252,926 / 2,252,926
+
+Fitting model: age_dbh_height with features ['tree_age_yrs', 'dbh_cm_bill', 'height_m_bill']
+
+Fitting model: age_dbh_height (features: tree_age_yrs, dbh_cm_bill, height_m_bill)
+  Fitted species: 151
+  Scored rows   : 190,296 / 2,252,926
+
+Fitting model: dbh_height_canopy_width with features ['dbh_cm_bill', 'height_m_bill', 'canopy_width_avg_m']
+
+Fitting model: dbh_height_canopy_width (features: dbh_cm_bill, height_m_bill, canopy_width_avg_m)
+  Fitted species: 140
+  Scored rows   : 27,964 / 2,252,926
+
+Fitting model: dbh_height_canopy_area with features ['dbh_cm_bill', 'height_m_bill', 'canopy_area_m2']
+
+Fitting model: dbh_height_canopy_area (features: dbh_cm_bill, height_m_bill, canopy_area_m2)
+  Fitted species: 140
+  Scored rows   : 27,964 / 2,252,926
+
+Model Summary:
+                     model  species_fitted  ...  rows_flagged  pct_flagged
+0               dbh_height             198  ...           363     0.000161
+1           age_dbh_height             151  ...            19     0.000008
+2  dbh_height_canopy_width             140  ...             6     0.000003
+3   dbh_height_canopy_area             140  ...             5     0.000002
+
+[4 rows x 5 columns]
+
+Wrote report: data\_reports\outlier_summary_multimodel.csv
+
+================================================================================
+Step: Save outputs
+Output path: data\_processed\wca_filtered_annotated.csv
+[OK] Saved annotated dataset: 2,252,926 rows, 34 columns
+================================================================================

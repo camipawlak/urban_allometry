@@ -1,0 +1,570 @@
+---
+title: "age_dbh_filters"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(lme4)
+library(modelr)
+library(rlang)
+library(ggeffects)
+library(ggforce)
+library(writexl)
+library(plotly)
+
+data_dir <- 'data/_processed/'
+
+knitr::opts_knit$set(root.dir = "../..")
+
+```
+
+# Read in data
+
+```{r}
+
+# read in data
+wca <- read_csv("data/_processed/wca_filtered_annotated.csv") |>
+  rename_with(~str_remove_all(.x, '_bill')) |>
+  rename(dbh = dbh_cm,
+         height = height_m,
+         age = tree_age_yrs,
+         spp = scientific_name_clean,
+         date = date_worked,
+         lat = latitude,
+         lon = longitude)
+
+wca_age <- wca %>%
+group_by(spp, tree_id) |>
+  filter(n() >= 2, !is.na(age)) |>
+  mutate(
+    delta_days  = as.numeric(difftime(date, lag(date), units = "days")),
+    delta_yrs   = delta_days / 365.25,
+    delta_dbh_cm = dbh - lag(dbh),
+    dbh_start_cm = lag(dbh),
+    dbh_end_cm = dbh
+  ) |>
+  ungroup() |>
+  mutate(growth_rate = delta_dbh_cm/delta_yrs,
+         growth_flag = ifelse(growth_rate > 4 | growth_rate == 0, T, F),
+         delta_flag = ifelse(delta_yrs > 2, F, T),
+         delta_dbh_flag = ifelse(delta_dbh_cm > 0, F, T)
+         ) %>%
+  filter(!is.na(delta_yrs),
+         is.finite(delta_yrs), is.finite(delta_dbh_cm))
+
+spp_of_interest <- unique(wca_age$spp)
+
+wca_age_clean <- wca_age %>% filter(growth_flag == F, delta_flag == F, delta_dbh_flag == F) |>
+  mutate(log_growth_rate = log(delta_dbh_cm)/log(delta_yrs)) %>% 
+  filter(spp %in% spp_of_interest,
+         dbh > 2.54) |>
+  group_by(tree_id) |>
+  slice_sample(n = 1) |>
+  ungroup()
+
+
+wca_clean <- wca_age %>% filter(spp %in% spp_of_interest,
+         dbh > 2.54) |>
+  group_by(tree_id) |>
+  slice_sample(n = 1) |>
+  ungroup()
+
+wca_growth_rates <- wca %>%
+group_by(spp, tree_id) |>
+  filter(n() >= 2) |>
+  mutate(
+    delta_days  = as.numeric(difftime(date, lag(date), units = "days")),
+    delta_yrs   = delta_days / 365.25,
+    delta_dbh_cm = dbh - lag(dbh),
+    dbh_start_cm = lag(dbh),
+    dbh_end_cm = dbh
+  ) |>
+  ungroup() |>
+  mutate(growth_rate = delta_dbh_cm/delta_yrs,
+         growth_flag = ifelse(growth_rate > 4 | growth_rate == 0, T, F),
+         delta_flag = ifelse(delta_yrs > 2, F, T),
+         delta_dbh_flag = ifelse(delta_dbh_cm > 0, F, T)
+         ) %>%
+  filter(!is.na(delta_yrs),
+         is.finite(delta_yrs), is.finite(delta_dbh_cm))
+
+```
+
+# Generate unfiltered model
+
+
+```{r}
+
+# drop anomalies, records missing age, and species with fewer than 30 observations, trees younger than 1 year or with implied mean growth rate of > 4 cm per year
+min_n <- 30
+dbh_age_data <- wca_clean |>
+  filter(age_dbh_height_is_anom == FALSE, !is.na(age)) |>
+  add_count(spp, name = "n_spp") |>
+  filter(n_spp >= 30) |>
+  select(-n_spp)
+
+# fit random slope and intercept model
+fit.lme <- lmer(log(dbh) ~ log(age) + (1 + log(age) | spp),
+                data = dbh_age_data,
+                control = lmerControl(optimizer = "bobyqa",
+                                      optCtrl = list(maxfun = 2e6)))
+
+
+
+```
+
+
+# Generate unfiltered species level BLUPs
+
+```{r}
+
+## species-level and genus-level coefficient blups -----------------------------
+
+# species-level blups (conditional coefficients: fixed + random)
+sp_blups <- coef(fit.lme)$spp %>%
+  as.data.frame() %>%
+  rownames_to_column("spp") %>%
+  rename(intercept = `(Intercept)`, slope = `log(age)`)
+
+# full covariance of blups/blues, conditional on variance parameter estimates
+V <- vcov(fit.lme, full = TRUE)
+
+# bookkeeping for random effects
+p     <- length(fixef(fit.lme))   # number of fixed effects
+Gp    <- getME(fit.lme, "Gp")     # block pointers into b (0-based)
+cnms  <- getME(fit.lme, "cnms")   # term names per RE grouping factor
+flist <- getME(fit.lme, "flist")  # grouping factors (levels/order)
+
+# fixed-effect index in V
+i_beta <- function(term) {
+  i <- match(term, colnames(V))
+  stopifnot(!is.na(i))
+  i
+}
+
+# random-effect index in V
+i_re <- function(grp, lvl, term) {
+  j <- match(grp, names(cnms))
+  stopifnot(!is.na(j))
+
+  levs <- levels(flist[[j]])
+  il <- match(lvl, levs)
+  it <- match(term, cnms[[j]])
+  stopifnot(!is.na(il), !is.na(it))
+
+  nc <- length(cnms[[j]])
+  start <- p + Gp[j] + 1  # convert 0-based pointer to 1-based V index
+  start + (il - 1) * nc + (it - 1)
+}
+
+# SE for sum of components
+se_sum <- function(idxs) {
+  v <- V[idxs, idxs, drop = FALSE]
+  sqrt(sum(v))
+}
+
+# species-level SEs for conditional coefficients (beta + b_spp)
+grp_name <- "spp"
+spp_levels <- levels(flist[[grp_name]])
+
+sp_full_se <- tibble(
+  spp = spp_levels,
+  intercept_se = sapply(spp_levels, \(s)
+                        se_sum(c(i_beta("(Intercept)"),
+                                 i_re(grp_name, s, "(Intercept)")))),
+  slope_se = sapply(spp_levels, \(s)
+                    se_sum(c(i_beta("log(age)"),
+                             i_re(grp_name, s, "log(age)"))))
+)
+
+# join with point estimates
+sp_blups_se <- sp_blups %>%
+  left_join(select(sp_full_se, spp, intercept_se, slope_se),
+            by = "spp")
+
+# population-level estimates with SEs
+blues_tbl <- tibble(
+  term = c("intercept", "slope"),
+  estimate = c(unname(fixef(fit.lme)["(Intercept)"]),
+               unname(fixef(fit.lme)["log(age)"])),
+  se = c(sqrt(V[i_beta("(Intercept)"), i_beta("(Intercept)")]),
+         sqrt(V[i_beta("log(age)"),    i_beta("log(age)")]))
+)
+
+# coefficient list
+coef_list <- list(
+  species = sp_blups_se,
+  population = blues_tbl
+)
+
+
+
+```
+
+
+# Generate filtered age model
+
+
+```{r}
+
+
+# drop anomalies, records missing age, and species with fewer than 30 observations, trees younger than 1 year or with implied mean growth rate of > 4 cm per year
+min_n <- 30
+dbh_age_data_clean <- wca_age_clean |>
+  filter(age_dbh_height_is_anom == FALSE, !is.na(age)) |>
+  add_count(spp, name = "n_spp") |>
+  filter(n_spp >= 30) |>
+  select(-n_spp)
+
+# fit random slope and intercept model
+fit.lme_clean <- lmer(log(dbh) ~ log(age) + (1 + log(age) | spp),
+                data = dbh_age_data_clean,
+                control = lmerControl(optimizer = "bobyqa",
+                                      optCtrl = list(maxfun = 2e6)))
+
+
+
+```
+
+
+# Generate filtered species level BLUPs
+
+```{r}
+
+## species-level and genus-level coefficient blups -----------------------------
+
+# species-level blups (conditional coefficients: fixed + random)
+sp_blups_clean <- coef(fit.lme_clean)$spp %>%
+  as.data.frame() %>%
+  rownames_to_column("spp") %>%
+  rename(intercept = `(Intercept)`, slope = `log(age)`)
+
+# full covariance of blups/blues, conditional on variance parameter estimates
+V_cl <- vcov(fit.lme_clean, full = TRUE)
+
+# bookkeeping for random effects
+p_cl     <- length(fixef(fit.lme_clean))
+Gp_cl    <- getME(fit.lme_clean, "Gp")
+cnms_cl  <- getME(fit.lme_clean, "cnms")
+flist_cl <- getME(fit.lme_clean, "flist")
+
+# fixed-effect index in V_cl
+i_beta_cl <- function(term) {
+  i <- match(term, colnames(V_cl))
+  stopifnot(!is.na(i))
+  i
+}
+
+# random-effect index in V_cl
+i_re_cl <- function(grp, lvl, term) {
+  j <- match(grp, names(cnms_cl))
+  stopifnot(!is.na(j))
+
+  levs <- levels(flist_cl[[j]])
+  il <- match(lvl, levs)
+  it <- match(term, cnms_cl[[j]])
+  stopifnot(!is.na(il), !is.na(it))
+
+  nc <- length(cnms_cl[[j]])
+  start <- p_cl + Gp_cl[j] + 1
+  start + (il - 1) * nc + (it - 1)
+}
+
+# SE for sum of components
+se_sum_cl <- function(idxs) {
+  v <- V_cl[idxs, idxs, drop = FALSE]
+  sqrt(sum(v))
+}
+
+# species-level SEs for conditional coefficients (beta + b_spp)
+grp_name_cl <- "spp"
+spp_levels_cl <- levels(flist_cl[[grp_name_cl]])
+
+sp_full_se_cl <- tibble(
+  spp = spp_levels_cl,
+  intercept_se = sapply(spp_levels_cl, \(s)
+                        se_sum_cl(c(i_beta_cl("(Intercept)"),
+                                    i_re_cl(grp_name_cl, s, "(Intercept)")))),
+  slope_se = sapply(spp_levels_cl, \(s)
+                    se_sum_cl(c(i_beta_cl("log(age)"),
+                                i_re_cl(grp_name_cl, s, "log(age)"))))
+)
+
+# join with point estimates
+sp_blups_se_clean <- sp_blups_clean %>%
+  left_join(select(sp_full_se_cl, spp, intercept_se, slope_se),
+            by = "spp")
+
+# population-level estimates with SEs
+blues_tbl_clean <- tibble(
+  term = c("intercept", "slope"),
+  estimate = c(unname(fixef(fit.lme_clean)["(Intercept)"]),
+               unname(fixef(fit.lme_clean)["log(age)"])),
+  se = c(sqrt(V_cl[i_beta_cl("(Intercept)"), i_beta_cl("(Intercept)")]),
+         sqrt(V_cl[i_beta_cl("log(age)"),    i_beta_cl("log(age)")]))
+)
+
+# coefficient list
+coef_list_clean <- list(
+  species = sp_blups_se_clean,
+  population = blues_tbl_clean
+)
+
+
+
+```
+
+
+# Visualize models and data
+
+```{r}
+
+# --- set species name here ---
+
+spp <- unique(sp_blups_clean$spp)
+
+sp <- spp[32]
+
+# background points: all flagged observations for this species
+bg_sp <- wca_age %>%
+  filter(spp == sp, dbh > 2.54) %>%
+  mutate(flag_label = if_else(
+    growth_flag | delta_flag | delta_dbh_flag, "flagged", "retained"
+  ))
+
+bg_sp_mean_growth <- wca_growth_rates %>%
+  filter(spp == sp, dbh > 2.54,
+         growth_flag == F,
+         delta_dbh_flag == F,
+         delta_flag == F) %>%
+  select(growth_rate) %>%
+  .$growth_rate %>%
+  median()
+
+bg_sp_median_log_gr <- wca_age_clean %>%
+  filter(spp == sp, dbh > 2.54,
+         growth_flag == F,
+         delta_dbh_flag == F,
+         delta_flag == F) %>%
+  pull(log_growth_rate) %>%
+  median(na.rm = TRUE)
+
+bg_sp_growth_adj <- wca_age %>%
+  filter(spp == sp, dbh > 2.54,
+         growth_flag == F,
+         delta_dbh_flag == F,
+         delta_flag == F) %>%
+  mutate(dbh_class = case_when(
+    dbh <= 10  ~ "0-10",
+    dbh <= 25  ~ "10-25",
+    TRUE       ~ ">25"
+  )) %>%
+  group_by(dbh_class) %>%
+  summarise(mean_gr = mean(growth_rate, na.rm = TRUE), .groups = "drop") %>%
+  pull(mean_gr) %>%
+  mean(na.rm = TRUE)
+
+# helper: build species-level prediction curve on original scale
+make_pred <- function(blups_se, blues, data_for_range) {
+  sb <- filter(blups_se, spp == sp)
+  if (nrow(sb) == 0) return(NULL)
+
+  x_rng <- data_for_range %>%
+    filter(spp == sp) %>%
+    summarise(xmin = min(log(age), na.rm = TRUE),
+              xmax = max(log(age), na.rm = TRUE))
+
+  b0_pop <- blues$estimate[blues$term == "intercept"]
+  b1_pop <- blues$estimate[blues$term == "slope"]
+
+  tibble(x = seq(x_rng$xmin, x_rng$xmax, length.out = 200)) %>%
+    mutate(
+      fit      = sb$intercept + sb$slope * x,
+      se       = sqrt(sb$intercept_se^2 + x^2 * sb$slope_se^2),
+      lo       = fit - 1.96 * se,
+      hi       = fit + 1.96 * se,
+      pop_fit  = b0_pop + b1_pop * x,
+      age_orig     = exp(x),
+      fit_orig     = exp(fit),
+      lo_orig      = exp(lo),
+      hi_orig      = exp(hi),
+      pop_fit_orig = exp(pop_fit)
+    )
+}
+
+pred_uf <- make_pred(sp_blups_se,       blues_tbl,       dbh_age_data)
+pred_cl <- make_pred(sp_blups_se_clean, blues_tbl_clean, dbh_age_data_clean)
+
+```
+
+## Plot 1: filtered and unfiltered models
+
+```{r}
+
+p_base <- ggplot(bg_sp, aes(x = age, y = dbh)) +
+  geom_point(aes(color = flag_label), alpha = 0.7, size = 1.5) +
+  scale_color_manual(
+    name = NULL,
+    values = c(retained = "grey40", flagged = "orange")
+  ) +
+  # unfiltered model ribbon + lines
+  { if (!is.null(pred_uf)) list(
+    geom_ribbon(data = pred_uf,
+                aes(x = age_orig, ymin = lo_orig, ymax = hi_orig),
+                alpha = 0.15, fill = "firebrick", inherit.aes = FALSE),
+    geom_line(data = pred_uf,
+              aes(x = age_orig, y = pop_fit_orig),
+              color = "firebrick", linewidth = 0.3, linetype = "dashed", inherit.aes = FALSE),
+    geom_line(data = pred_uf,
+              aes(x = age_orig, y = fit_orig),
+              color = "firebrick", linewidth = 0.7, inherit.aes = FALSE)
+  )} +
+  # filtered model ribbon + lines
+  { if (!is.null(pred_cl)) list(
+    geom_ribbon(data = pred_cl,
+                aes(x = age_orig, ymin = lo_orig, ymax = hi_orig),
+                alpha = 0.15, fill = "steelblue", inherit.aes = FALSE),
+    geom_line(data = pred_cl,
+              aes(x = age_orig, y = pop_fit_orig),
+              color = "steelblue", linewidth = 0.3, linetype = "dashed", inherit.aes = FALSE),
+    geom_line(data = pred_cl,
+              aes(x = age_orig, y = fit_orig),
+              color = "steelblue", linewidth = 0.7, inherit.aes = FALSE)
+  )} +
+  labs(
+    title = sp,
+    subtitle = "red = unfiltered model  |  blue = filtered model  |  dashed = population",
+    x = "Age (years)", y = "DBH (cm)"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(linewidth = 0.1),
+    legend.position = "top"
+  )
+
+p_base
+
+```
+
+## Plot 2: with median growth rate
+
+```{r}
+
+p_base +
+  geom_abline(intercept = 2.54, slope = bg_sp_mean_growth, color = "forestgreen") +
+  labs(
+    title = sprintf("%s  |  median growth rate: %.2f cm/yr", sp, bg_sp_mean_growth),
+    subtitle = "red = unfiltered model  |  blue = filtered model  |  dashed = population  |  green = median growth rate"
+  )
+
+```
+
+## Plot 3: with DBH-class-adjusted growth rate
+
+```{r}
+
+p_base +
+  geom_abline(intercept = 2.54, slope = bg_sp_mean_growth, color = "forestgreen") +
+  geom_abline(intercept = 2.54, slope = bg_sp_growth_adj, color = "purple") +
+  labs(
+    title = sprintf("%s  |  median growth rate: %.2f cm/yr  |  adj growth rate: %.2f cm/yr",
+                    sp, bg_sp_mean_growth, bg_sp_growth_adj),
+    subtitle = "red = unfiltered model  |  blue = filtered model  |  dashed = population  |  green = median growth  |  purple = DBH-class-adj growth"
+  )
+
+```
+
+## Plot 4: filtered model with median growth rate and median log growth rate
+
+```{r}
+
+  x_rng <- bg_sp %>%
+    summarise(xmin = min(log(age), na.rm = TRUE),
+              xmax = max(log(age), na.rm = TRUE))
+
+ log_pred <- tibble(x = seq(x_rng$xmin, x_rng$xmax, length.out = 200)) %>%
+    mutate(
+      fit      = log(2.54) + bg_sp_median_log_gr * x,
+      age_orig     = exp(x),
+      fit_orig     = exp(fit)
+    )
+
+
+p_base +
+  geom_abline(intercept = 2.54, slope = bg_sp_mean_growth, color = "forestgreen") +
+  geom_line(data = log_pred,
+              aes(x = age_orig, y = fit_orig),
+              color = "darkorange", linewidth = 0.7, inherit.aes = FALSE) +
+  labs(
+    title = sprintf("%s  |  median growth rate: %.2f cm/yr  |  median log growth rate: %.3f",
+                    sp, bg_sp_mean_growth, bg_sp_median_log_gr),
+    subtitle = "blue = filtered model  |  dashed = population  |  green = median growth rate  |  orange = median log growth rate"
+  )
+
+```
+
+
+# Save species plots: filtered model + median growth rate
+
+```{r}
+
+out_dir <- "_img/age-dbh/ind_plots"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+for (sp in unique(sp_blups_clean$spp)) {
+
+  bg_sp_loop <- wca_age %>%
+    filter(spp == sp, dbh > 2.54) %>%
+    mutate(flag_label = if_else(
+      growth_flag | delta_flag | delta_dbh_flag, "flagged", "retained"
+    ))
+
+  median_gr <- wca_growth_rates %>%
+    filter(spp == sp, dbh > 2.54,
+           growth_flag == FALSE,
+           delta_dbh_flag == FALSE,
+           delta_flag == FALSE) %>%
+    pull(growth_rate) %>%
+    median(na.rm = TRUE)
+
+  pred_cl_loop <- make_pred(sp_blups_se_clean, blues_tbl_clean, dbh_age_data_clean)
+
+  if (is.null(pred_cl_loop) || is.na(median_gr)) next
+
+  p_loop <- ggplot(bg_sp_loop, aes(x = age, y = dbh)) +
+    geom_point(aes(color = flag_label), alpha = 0.7, size = 1.5) +
+    scale_color_manual(
+      name = NULL,
+      values = c(retained = "grey40", flagged = "orange")
+    ) +
+    geom_ribbon(data = pred_cl_loop,
+                aes(x = age_orig, ymin = lo_orig, ymax = hi_orig),
+                alpha = 0.15, fill = "steelblue", inherit.aes = FALSE) +
+    geom_line(data = pred_cl_loop,
+              aes(x = age_orig, y = pop_fit_orig),
+              color = "steelblue", linewidth = 0.3, linetype = "dashed", inherit.aes = FALSE) +
+    geom_line(data = pred_cl_loop,
+              aes(x = age_orig, y = fit_orig),
+              color = "steelblue", linewidth = 0.7, inherit.aes = FALSE) +
+    geom_abline(intercept = 2.54, slope = median_gr, color = "forestgreen") +
+    labs(
+      title = sprintf("%s  |  median growth rate: %.2f cm/yr", sp, median_gr),
+      subtitle = "blue = filtered model  |  dashed = population  |  green = median growth rate",
+      x = "Age (years)", y = "DBH (cm)"
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(linewidth = 0.1),
+      legend.position = "top"
+    )
+
+  fname <- file.path(out_dir, paste0(gsub(" ", "_", sp), ".png"))
+  ggsave(fname, p_loop, width = 7, height = 5, dpi = 150)
+}
+
+```
+

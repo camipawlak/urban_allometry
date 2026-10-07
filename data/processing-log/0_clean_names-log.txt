@@ -1,0 +1,116 @@
+Run timestamp: 2026-05-08T09:56:54-07:00
+--------------------------------------------------------------------------------
+Using data_dir : data\_raw
+Using out_dir  : data\_processed
+Using log_dir  : data\processing-log
+Using report_dir: data\_reports
+Input path     : data\_raw\wca_All_SpeciesBotanical_accessed012225.csv
+Resolver path  : data\_raw\TreeNameResolver.xlsx
+Top200 path    : data\_raw\cufi_top_200_species_in_california.csv
+Output path    : data\_processed\wca_name_resolved.csv
+Log file       : data\processing-log\0_clean_names-log.txt
+Report (unmatched SpeciesBotanical) : data\_reports\unmatched_speciesbotanical_bycount.csv
+Report (unmatched CurrentSpeciesBotanical) : data\_reports\unmatched_currentspeciesbotanical_bycount.csv
+
+Reading input CSV...
+Loaded 6725765 rows
+Resolver rows: 6858
+
+Cleaning botanical names...
+SpeciesBotanical cleaned: 1476623
+CurrentSpeciesBotanical cleaned: 1322238
+Unique SpeciesBotanical_clean: 958
+Unique CurrentSpeciesBotanical_clean: 965
+                                 count  count
+0                           Other tree  18154
+1                    Unidentified spp.   9892
+2                            Palm spp.   2096
+3                   Citrus × aurantium    144
+4                         Hedera helix     81
+5                            Deciduous     52
+6                   Strelitzia reginae     32
+7                                Shrub     22
+8                                  nan     12
+9                                Vines     11
+10                Eucalyptus x torwood     11
+11             Miscellaneous deciduous      8
+12          Acer rubrum 'Schlesingeri'      4
+13                               Brush      4
+14                     Citrus × meyeri      3
+15          Tilia tomentosa 'Sashazam'      2
+16                          Fruit spp.      2
+17                  Non-native species      2
+18              Malus purpurea 'Eleyi'      2
+19                               Mixed      1
+20                              Cactus      1
+21              Miscellaneous conifers      1
+22                           Root ball      1
+23               Cassipourea gummiflua      1
+24                 Plumbago auriculata      1
+25  Quercus robur x alba ‘Crimschmidt’      1
+
+Total unmatched unique (unmatched_speciesbotanical): 26
+                                 count   count
+0                          Vacant site  668262
+1                                Stump   53193
+2                    Unidentified spp.   14429
+3     No longer a utility encroachment   12269
+4                      Unsuitable site    5649
+5                                 Pole    2064
+6          Not City Planted/Maintained    1855
+7                           Other tree    1847
+8               Stump - not accessible    1675
+9                            Dead Tree    1531
+10                   Tree site deleted    1227
+11                           Palm spp.     543
+12            Tree site does not exist     536
+13                  Citrus × aurantium     325
+14                 Ivy on Pole / Cable     303
+15                          No Replant     298
+16                             Unknown     280
+17                  Poor planting site     252
+18         Resident Refusal - No Plant     213
+19             No tree at this address     206
+20                                 nan     152
+21          WCA worked on private tree     113
+22                        Hedera helix      86
+23                           Deciduous      54
+24                    Resident refusal      49
+25                   Construction site      49
+26    Refer to corrridor specific plan      46
+27               W-Obstruction at site      46
+28                               Bench      36
+29                  Strelitzia reginae      30
+30          Ulmus americana ‘Accolade’      18
+31                Eucalyptus x torwood      18
+32                      Asphalted well      16
+33                  No primary species      16
+34                               Brush      15
+35                               Vines      11
+36          W-Fence obstructs planting       9
+37       W-Property owner refused tree       8
+38                             Replant       7
+39                               Shrub       7
+40             Miscellaneous deciduous       6
+41               Small shrub under 15'       5
+42           W-Fire hydrant within 10'       5
+43                     Citrus × meyeri       4
+44  Quercus robur x alba ‘Crimschmidt’       4
+45                          Fruit spp.       4
+46          Resident Refusal - No Trim       4
+47          W-Parkstrip width under 3'       2
+48                      Lantana camara       2
+49                 Plumbago auriculata       2
+50                    Ipomoea purpurea       2
+51                              Cactus       2
+
+Total unmatched unique (unmatched_currentspeciesbotanical): 52
+
+Wrote unmatched reports:
+ - data\_reports\unmatched_speciesbotanical_bycount.csv
+ - data\_reports\unmatched_currentspeciesbotanical_bycount.csv
+Number of valid species: 200
+Rows before subsetting: 6725765
+Rows after subsetting : 5578032
+Unique spp after      : 199
+Writing output: 5578032 rows saved to data\_processed\wca_name_resolved.csv

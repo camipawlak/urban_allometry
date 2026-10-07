@@ -1,0 +1,175 @@
+---
+title: "Figures 2-3 and S3"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(ggrepel)
+library(patchwork)
+library(here)
+```
+
+## Data and coefficients
+
+```{r data}
+load(here("data/_processed/wca-partitions.RData"))   # wca_train, wca_val
+
+read_coefs <- function(path) {
+  list(species = read_excel(path, sheet = "species"),
+       population = read_excel(path, sheet = "population"))
+}
+```
+
+---
+
+## Figure 2: population vs. species allometric curves
+
+```{r figure2-data}
+ht_coefs    <- read_coefs(here("rslt/dbh-ht/dbh-ht-coefs.xlsx"))
+canopy_coefs <- read_coefs(here("rslt/dbh-canopy/dbh-canopy-coefs.xlsx"))
+agedbh_coefs <- read_coefs(here("rslt/age-dbh/dbh-age-coefs.xlsx"))
+ageht_coefs  <- read_coefs(here("rslt/age-ht/age-ht-coefs.xlsx"))
+
+pop_color <- "#2E8B57"
+spp_color <- "grey70"
+```
+
+```{r figure2-plot, fig.width=8, fig.height=8}
+allometry_panel <- function(coefs, data, xvar, xlab, ylab) {
+  b0 <- coefs$population$estimate[coefs$population$term == "intercept"]
+  b1 <- coefs$population$estimate[coefs$population$term == "slope"]
+
+  x <- data[[xvar]]
+  x_grid <- exp(seq(log(min(x, na.rm = TRUE)), log(max(x, na.rm = TRUE)), length.out = 100))
+  pop_line <- tibble(x = x_grid, y = exp(b0 + b1 * log(x_grid)), curve = "Population")
+
+  rng <- data |>
+    group_by(spp) |>
+    summarise(xmin = min(.data[[xvar]], na.rm = TRUE),
+              xmax = max(.data[[xvar]], na.rm = TRUE), .groups = "drop")
+
+  sp_lines <- coefs$species |>
+    inner_join(rng, by = "spp") |>
+    rowwise() |>
+    mutate(x = list(exp(seq(log(xmin), log(xmax), length.out = 50)))) |>
+    unnest(x) |>
+    mutate(y = exp(intercept + slope * log(x)), curve = "Species") |>
+    ungroup()
+
+  ggplot(mapping = aes(x = x, y = y, color = curve)) +
+    geom_line(data = sp_lines, aes(group = spp), alpha = 0.5, linewidth = 0.3) +
+    geom_line(data = pop_line, linewidth = 1.1) +
+    scale_color_manual(values = c(Population = pop_color, Species = spp_color), name = NULL) +
+    labs(x = xlab, y = ylab) +
+    theme_classic(base_size = 16) +
+    theme(legend.position = "bottom")
+}
+
+ht_data     <- wca_train |> filter(dbh_height_is_anom == FALSE)
+canopy_data <- wca_train |> filter(dbh_height_canopy_width_is_anom == FALSE) |> drop_na(canopy_width_avg_m)
+age_data    <- wca_train |> filter(age_dbh_height_is_anom == FALSE, !is.na(age))
+
+figure2 <- (
+  allometry_panel(ht_coefs, ht_data, "dbh", "DBH (cm)", "Height (m)") +
+  allometry_panel(canopy_coefs, canopy_data |> rename(canopy = canopy_width_avg_m), "dbh", "DBH (cm)", "Canopy width (m)") +
+  allometry_panel(agedbh_coefs, age_data, "age", "Age (years)", "DBH (cm)") +
+  allometry_panel(ageht_coefs, age_data |> filter(!is.na(height)), "age", "Age (years)", "Height (m)")
+) + plot_layout(ncol = 2, guides = "collect") & theme(legend.position = "bottom")
+
+figure2
+
+fs::dir_create(here("_img/manuscript-figures"))
+ggsave(here("_img/manuscript-figures/figure2_species_allometry.png"), figure2, width = 8, height = 8, dpi = 300, bg = "white")
+```
+
+---
+
+## Figure 3: species deviations from the height-DBH population curve
+
+```{r figure3, fig.width=5.5, fig.height=5.5}
+b0 <- ht_coefs$population$estimate[ht_coefs$population$term == "intercept"]
+b1 <- ht_coefs$population$estimate[ht_coefs$population$term == "slope"]
+
+dbh_small <- quantile(ht_data$dbh, 0.25, na.rm = TRUE)
+dbh_large <- quantile(ht_data$dbh, 0.75, na.rm = TRUE)
+
+s_dev <- ht_coefs$species |>
+  transmute(
+    spp,
+    d_small = (intercept + slope * log(dbh_small)) - (b0 + b1 * log(dbh_small)),
+    d_large = (intercept + slope * log(dbh_large)) - (b0 + b1 * log(dbh_large))
+  ) |>
+  mutate(
+    score = sqrt(d_small^2 + d_large^2),
+    label = if_else(rank(-score) <= 3, spp, NA_character_),
+    point_col = if_else(rank(-score) <= 3, pop_color, spp_color)
+  )
+
+figure3 <- ggplot(s_dev, aes(x = d_small, y = d_large)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4) +
+  geom_point(aes(color = point_col), size = 2, show.legend = FALSE) +
+  scale_color_identity() +
+  ggrepel::geom_text_repel(aes(label = label), na.rm = TRUE, size = 5, fontface = "bold", color = pop_color) +
+  coord_equal() +
+  theme_classic(base_size = 16) +
+  labs(x = paste0("log-height deviation at DBH ", round(dbh_small, 1)),
+       y = paste0("log-height deviation at DBH ", round(dbh_large, 1)))
+
+figure3
+
+ggsave(here("_img/manuscript-figures/figure3_species_deviations.png"), figure3, width = 5.5, height = 5.5, dpi = 300, bg = "white")
+```
+
+---
+
+## Figure S3: mixed-model vs. species-model RMSPE validation
+
+Source: `scripts/r/dbh-ht-model.R`, RMSPE comparison section.
+
+```{r s3-summary}
+rmspe_df <- read_csv(here("rslt/dbh-ht/dbh-ht-rmspe-comparison.csv"))
+
+s3_summary <- tibble(
+  quantity = c("mean RMSPE - mixed model", "mean RMSPE - species model",
+               "% agreeing within 5% (rel. to smaller)", "% agreeing within 5% (rel. to mixed model)"),
+  value = c(
+    mean(rmspe_df$lmer_rmspe),
+    mean(rmspe_df$mcpherson_rmspe),
+    mean(abs(rmspe_df$lmer_rmspe - rmspe_df$mcpherson_rmspe) / pmin(rmspe_df$lmer_rmspe, rmspe_df$mcpherson_rmspe) <= 0.05) * 100,
+    mean(abs(rmspe_df$lmer_rmspe - rmspe_df$mcpherson_rmspe) / rmspe_df$lmer_rmspe <= 0.05) * 100
+  )
+)
+knitr::kable(s3_summary, digits = 2)
+```
+
+Means match draft text (2.28 / 2.31). Neither 5% threshold above reproduces
+the draft's claimed 88%. Plot below uses `lmer`/`mcpherson` (squared error),
+not their square root, despite the axis/caption saying RMSPE.
+
+```{r s3-plot, fig.width=3.2, fig.height=3.2}
+top_n <- 2
+plot_df <- rmspe_df |>
+  mutate(label = if_else(rank(-diff) <= top_n, spp, NA_character_),
+         highlight = if_else(!is.na(label), "highlight", "background"))
+
+figureS3 <- ggplot(plot_df, aes(x = lmer, y = mcpherson)) +
+  geom_point(data = filter(plot_df, highlight == "background"),
+             color = "grey50", alpha = 0.5, size = 2) +
+  geom_point(data = filter(plot_df, highlight == "highlight"),
+             color = "#2E8B57", size = 2) +
+  geom_abline(slope = 1, linetype = "dashed") +
+  ggrepel::geom_text_repel(aes(label = label), na.rm = TRUE, size = 3,
+                            hjust = 1, direction = "y", nudge_x = -0.05) +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_classic() +
+  labs(x = "Mixed Model RMSPE", y = "Species Model RMSPE")
+
+figureS3
+
+ggsave(here("_img/manuscript-figures/figureS3_rmspe_validation.png"), figureS3, width = 3, height = 3, dpi = 300, bg = "white")
+```
