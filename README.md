@@ -8,7 +8,7 @@ repository contributors: Camille Pawlak, Trevor Ruiz, Julia Schedler, Reed Kenny
 
 ## Data availability
 
-**What is shared.** The cleaned, location-free tree inventory used to fit every model in the paper (`wca_inventory_public.csv`), a per-species frost-free-days table (`species_frost_free_days.csv`), and a data dictionary ([PUBLIC_DATA.md](PUBLIC_DATA.md)) are deposited on Zenodo alongside the paper (DOI: *to be added on publication*). The public inventory is the output of the full preprocessing chain below (name cleaning → quality control → anomaly flagging) with coordinates and internal columns removed by `scripts/py/3_make_public_data.py`. It can be substituted directly for the private pipeline output to reproduce the models, coefficient tables, and figures (see [Reproducing results from the public data](#reproducing-results-from-the-public-data)).
+**What is shared.** The cleaned, location-free tree inventory used to fit every model in the paper (`wca_inventory_public.csv`), a per-species frost-free-days table (`species_frost_free_days.csv`), and a data dictionary ([PUBLIC_DATA.md](PUBLIC_DATA.md)) are deposited on Zenodo alongside the paper: [doi:10.5281/zenodo.22236551](https://doi.org/10.5281/zenodo.22236551). The public inventory is the output of the full preprocessing chain below (name cleaning → quality control → anomaly flagging) with coordinates and internal columns removed by `scripts/py/3_make_public_data.py`. It can be substituted directly for the private pipeline output to reproduce the models, coefficient tables, and figures (see [Reproducing results from the public data](#reproducing-results-from-the-public-data)).
 
 **What is not shared, and why.** The raw tree records were provided by West Coast Arborists, Inc. (WCA), who agreed to the release of a subset of the inventory with per-tree location removed. The raw WCA export and every intermediate file upstream of the public release contain tree locations and are **not** included in this repository or the Zenodo deposit, for data-privacy reasons and under the terms of that agreement.
 
@@ -167,7 +167,7 @@ python scripts/py/2_anomaly.py --no-chdir-repo-root
 
 ### Reproducing results from the public data
 
-Download the Zenodo deposit and place its contents in `_zenodo/` at the repo root. Unzip `usfs-rds-2016-0005.zip` and copy the three tables the comparison analysis reads (`TS1_Regional_information.csv`, `TS3_Raw_tree_data.csv`, `TS6_Growth_coefficients.csv`) from `RDS-2016-0005/Data/` into `data/_raw/`. Then, in R from the repo root:
+Download the [Zenodo deposit](https://doi.org/10.5281/zenodo.22236551) and place its contents in `_zenodo/` at the repo root. Unzip `usfs-rds-2016-0005.zip` and copy the three tables the comparison analysis reads (`TS1_Regional_information.csv`, `TS3_Raw_tree_data.csv`, `TS6_Growth_coefficients.csv`) from `RDS-2016-0005/Data/` into `data/_raw/`. Then, in R from the repo root:
 
 ``` r
 INVENTORY_CSV <- "_zenodo/wca_inventory_public.csv"   # use the public release
