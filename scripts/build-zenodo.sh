@@ -59,7 +59,7 @@ hsize(){
 cat <<'HEADER'
 ================================================================================
 Supporting data for "New allometric equations for urban trees"
-https://github.com/ruizt/allometry
+https://github.com/camipawlak/urban_allometry
 ================================================================================
 
 FILES

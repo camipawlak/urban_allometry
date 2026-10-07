@@ -7,7 +7,7 @@ locations (latitude/longitude) and internal source-system columns have been
 removed for data-privacy reasons and under the data-sharing agreement with West
 Coast Arborists, Inc.; the raw inventory and all location-bearing intermediate
 files are not publicly available. The code that produced these files from the
-raw records is at https://github.com/ruizt/allometry (see `description.txt` for
+raw records is at https://github.com/camipawlak/urban_allometry (see `description.txt` for
 provenance).
 
 ## `wca_inventory_public.csv`

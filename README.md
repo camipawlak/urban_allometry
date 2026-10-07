@@ -4,7 +4,7 @@
 
 > New allometric equations for urban trees. *In prep.*
 
-repository contributors: Camille Pawlak, Trevor Ruiz, Julia Schedler, Kaviya Veerasingam
+repository contributors: Camille Pawlak, Trevor Ruiz, Julia Schedler, Reed Kenny, Kaviya Veerasingam
 
 ## Data availability
 
