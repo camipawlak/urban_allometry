@@ -331,29 +331,3 @@ This notebook needs three public reference files that are not redistributed here
 | `appendix11_wood_density_genus_species.csv` | Wood density (tonne/m³) by genus and species, columns `genus`, `species`, `wood_density_tonne_m3` | Appendix 11 (wood density values) of the same report ([Appendix 11 PDF](https://www.fs.usda.gov/nrs/pubs/gtr/gtr-nrs200-2023_appendixes/gtr_nrs200-2023_appendix11.pdf)), transcribed to CSV |
 
 Because the second and third files were transcribed from PDF tables, anyone recreating them needs the column names the notebook reads. For `itree_biomass.csv` these are `scientific_name`, `common_name`, `equation_id`, `equation_form`, `a`–`g`, `dbh_min`, `dbh_max`, `dbh_unit`, `uses_dht`, `output_units`, `reference`, `genus`, `Family`, `Order`, `Class` and `urban`.
-
-## contribution plan
-
-1.  **Keep raw data out of version control.**\
-    Store local-only inputs in underscore-prefixed directories (e.g., `data/_raw/example_data_file.csv`). Contributors should coordinate a shared external location for required inputs (e.g., Google Drive/OneDrive) and provide clear instructions for syncing locally. The simplest pattern is a single compressed archive that can be unzipped into `data/`.
-
-2.  **Prefer scripts for reproducible data processing.**\
-    Contributors should develop and maintain scripts (not notebooks) that generate the processed inputs needed for downstream work under `data/_processed/`. With rare exceptions, these scripts should be the only code that reads from raw, untracked inputs (e.g., `data/_raw/`).
-
-3.  **Use consistent, simple filenames.**\
-    Avoid date/version suffixes and uppercase letters in filenames. Separate words with `-` or `_`.
-
-4.  **Make commits small and issue-focused.**\
-    Don’t push bundled, unrelated changes. Keep commits scoped to a single issue/task and use clear, specific commit messages.
-
-5.  **Avoid hardcoding private/local paths.**\
-    Scripts and notebooks should not reference personal directories. As a rule, pipeline inputs/outputs should live under `data/_processed/` (and raw inputs under `data/_raw/`). Clear notebook outputs before committing (e.g., `jupyter nbconvert --clear-output --inplace notebook.ipynb`) so no data rows are saved in the repository.
-
-6.  **Treat notebooks as documents.**\
-    Use notebooks only when (i) narrative explanation alongside code execution is the goal, or (ii) drafting figures/text for publication. Otherwise, prefer scripts.
-
-7.  **Track execution issues in GitHub.**\
-    Document errors or workflow problems as GitHub issues and tag the relevant contributor(s).
-
-8.  **Keep the README current.**\
-    When scripts, filenames, or directory conventions change, update the README accordingly—especially the data-processing usage examples and any required input/output file lists.
